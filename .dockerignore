@@ -7,5 +7,4 @@ venv
 .ruff_cache
 benchmarks
 deploy
-docs
 tests

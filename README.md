@@ -4,7 +4,8 @@
 
 Production-grade LLM serving on Kubernetes: an OpenAI-compatible gateway over
 pluggable **vLLM** and **NVIDIA Triton Inference Server** backends, with Helm
-deployment, GPU autoscaling, and a reproducible throughput and latency benchmark suite.
+deployment, GPU autoscaling, an agentic RAG endpoint, and a reproducible
+throughput and latency benchmark suite.
 
 The question it answers: *with the model, GPU and engine held constant, what does
 the serving layer cost?* Both backends run the same vLLM engine on the same weights,
@@ -20,6 +21,7 @@ flowchart LR
       G[Gateway<br/>FastAPI, N replicas<br/>HPA on CPU]
       G -->|OpenAI API| V[vLLM server<br/>GPU, HPA on queue depth]
       G -->|generate / generate_stream| T[Triton + vLLM backend<br/>GPU, HPA on queue depth]
+      G --- R[(FAISS index<br/>agentic RAG)]
       P[(Prometheus)] -.scrapes.-> G & V & T
       A[prometheus-adapter] -.custom metrics.-> H[HPAs]
     end
@@ -36,8 +38,10 @@ default). The gateway handles:
   time out.
 - **Honest errors.** Waits for the first token before committing to a `200`, so a dead engine
   returns a real `503`, not a broken stream.
-- **Observability.** Prometheus metrics for time-to-first-token, latency, tokens and in-flight
-  requests.
+- **Agentic RAG.** `/v1/agent/chat` runs a multi-step agent that decides what to search, retrieves
+  passages from a FAISS index and answers with citations ([details](docs/agentic-rag.md)).
+- **Observability.** Prometheus metrics for time-to-first-token, latency, tokens, in-flight
+  requests and per-stage agent timings.
 
 ## Quickstart (no GPU needed)
 
@@ -55,6 +59,16 @@ curl -s localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -
 }'
 
 inferscale-bench run --concurrency 1,8,32 --requests 100 --max-tokens 64
+```
+
+Ask the agent a question about this project. It searches the bundled docs, then answers with
+citations (with the mock backend the answer text is filler, but the search, retrieval and
+citation steps are real):
+
+```bash
+curl -s localhost:8080/v1/agent/chat -H 'Content-Type: application/json' -d '{
+  "messages": [{"role": "user", "content": "Why does the gateway return 429?"}]
+}'
 ```
 
 It works with the OpenAI SDK unchanged:
@@ -111,6 +125,10 @@ Fairness rules (details in [design decisions](docs/design-decisions.md#3-benchma
 - Warmup requests before each level.
 - Engines benchmarked one at a time.
 
+The agent endpoint has its own harness: `inferscale-bench agent` breaks latency down into
+planning, retrieval and generation, and `inferscale-bench retrieval` measures recall@k and MRR
+of the vector search on a labeled question set ([results](docs/agentic-rag.md#retrieval-quality)).
+
 ### Results
 
 > **In progress.** GPU benchmark runs (Qwen2.5-1.5B-Instruct, single NVIDIA GPU) are
@@ -129,6 +147,8 @@ Fairness rules (details in [design decisions](docs/design-decisions.md#3-benchma
 | `inferscale_completion_tokens_total{backend}` | counter | Generated tokens |
 | `inferscale_inflight_requests` | gauge | Requests in progress on this pod |
 | `inferscale_rejected_total` | counter | Requests shed with `429` |
+| `inferscale_agent_stage_seconds{backend,stage}` | histogram | Agent time in `plan`, `retrieve`, `generate` |
+| `inferscale_agent_steps{backend}` | histogram | Planning steps per agent request |
 
 The engines' own metrics (`vllm:*`, `nv_inference_*`) are scraped alongside these.
 
@@ -145,6 +165,7 @@ All gateway settings are environment variables. The Helm chart sets them from `v
 | `INFERSCALE_TRITON_CHAT_TEMPLATE` | `chatml` | `chatml`, `llama3` or `plain`; must match the model |
 | `INFERSCALE_MAX_INFLIGHT` | `256` | Admission limit per pod (`0` = unlimited) |
 | `INFERSCALE_REQUEST_TIMEOUT_S` | `300` | Upstream timeout |
+| `INFERSCALE_RAG_*` | see [agentic RAG](docs/agentic-rag.md#configuration) | Agent endpoint, corpus, embedder |
 
 ## Repository layout
 
@@ -154,14 +175,16 @@ src/inferscale/
   backends/          Adapter interface + vLLM, Triton and mock adapters
   prompt.py          Chat templates for Triton
   stops.py           Streaming-safe stop-sequence filter
-  bench/             Load generator, statistics, reports
+  rag/               Chunking, embeddings, FAISS index, agent loop, retrieval evaluation
+  bench/             Load generators (chat and agent), statistics, reports
 deploy/
   helm/inferscale/   Helm chart and value profiles (default, single-gpu, mock)
   compose/           Docker Compose for a single GPU host
   gpu/               NVIDIA device-plugin time-slicing config
   kind/              Local cluster config
 triton/              Triton model repository for Docker runs
-docs/                Runbook, autoscaling, design decisions
+benchmarks/rag/      Labeled questions for retrieval evaluation
+docs/                Agentic RAG, runbook, autoscaling, design decisions
 tests/               Gateway, adapter, filter and harness tests (no GPU required)
 ```
 
@@ -182,8 +205,9 @@ CI runs on every push:
 ## Roadmap
 
 - [ ] Publish GPU benchmark results (vLLM vs. Triton, concurrency 1–64)
-- [ ] Agentic RAG workflow: tool calling plus FAISS retrieval behind the gateway, with
-      end-to-end latency of multi-step pipelines
+- [x] Agentic RAG workflow: tool use plus FAISS retrieval behind the gateway, with
+      per-stage latency of multi-step pipelines
+- [ ] Publish agent latency on GPU (vLLM vs. Triton) and compare dense embeddings
 - [ ] TensorRT-LLM backend for Triton as a separate engine-level comparison
 - [ ] KV-cache-aware routing across engine replicas
 - [ ] OpenTelemetry tracing from gateway to engine

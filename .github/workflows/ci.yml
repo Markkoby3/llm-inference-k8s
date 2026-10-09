@@ -92,6 +92,15 @@ jobs:
           pip install -e .
           inferscale-bench run --url http://localhost:8080 --label kind-mock \
             --concurrency 1,8 --requests 40 --warmup 4 --max-tokens 32 --out benchmarks/results
+      - name: Agentic RAG through the cluster
+        run: |
+          curl -fsS localhost:8080/healthz || {
+            kubectl port-forward svc/inferscale-gateway 8080:80 >/tmp/pf2.log 2>&1 & sleep 3; }
+          curl -fsS localhost:8080/v1/agent/chat -H 'Content-Type: application/json' \
+            -d '{"messages":[{"role":"user","content":"Why does the gateway return 429?"}],"max_tokens":16}' \
+            | python -c "import json,sys; b=json.load(sys.stdin); assert b['citations'], b; print(b['steps'], b['timings_ms'])"
+          inferscale-bench agent --url http://localhost:8080 --label kind-mock \
+            --concurrency 1,4 --requests 12 --max-tokens 16 --out benchmarks/results
       - name: Diagnostics on failure
         if: failure()
         run: |

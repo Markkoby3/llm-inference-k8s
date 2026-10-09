@@ -69,6 +69,14 @@ spec:
             - name: INFERSCALE_TRITON_CHAT_TEMPLATE
               value: {{ .Values.triton.chatTemplate | quote }}
             {{- end }}
+            - name: INFERSCALE_RAG_ENABLED
+              value: {{ .Values.gateway.rag.enabled | quote }}
+            - name: INFERSCALE_RAG_EMBEDDER
+              value: {{ .Values.gateway.rag.embedder | quote }}
+            - name: INFERSCALE_RAG_MAX_STEPS
+              value: {{ .Values.gateway.rag.maxSteps | quote }}
+            - name: INFERSCALE_RAG_TOP_K
+              value: {{ .Values.gateway.rag.topK | quote }}
             - name: INFERSCALE_MOCK_TTFT_MS
               value: {{ .Values.gateway.mock.ttftMs | quote }}
             - name: INFERSCALE_MOCK_INTER_TOKEN_MS

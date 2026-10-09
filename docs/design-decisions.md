@@ -88,3 +88,17 @@ The harness always streams, so throughput numbers use counted tokens on both pat
   finish during rollouts.
 - One uvicorn worker per gateway pod: scale with replicas so admission limits and
   metrics stay accurate per process.
+
+## 9. Agent tool use as JSON text, not the OpenAI tools API
+
+**Decision.** The RAG agent's planner replies with a JSON action in plain text
+(`{"action": "search", "query": "..."}`) instead of using the `tools` field.
+
+**Why.** Triton's generate endpoint has no tool-calling API, and vLLM's depends
+on model-specific parsers. Plain-text JSON runs identically on every backend, so
+agent latency can be compared between engines. The parser takes the first JSON
+object that names an action, and an unparseable plan falls back to a single
+search with the user's question rather than failing the request.
+
+**Trade-off.** Constrained decoding (vLLM `guided_json`) would guarantee valid
+JSON on vLLM, but not on Triton, which would make the comparison unequal.

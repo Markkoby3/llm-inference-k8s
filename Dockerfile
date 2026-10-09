@@ -7,6 +7,7 @@ WORKDIR /src
 RUN pip install --no-cache-dir build==1.2.2
 COPY pyproject.toml README.md ./
 COPY src ./src
+COPY docs ./docs
 RUN python -m build --wheel --outdir /dist
 
 FROM python:3.12-slim
@@ -14,7 +15,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 COPY --from=build /dist/*.whl /tmp/
-RUN pip install /tmp/*.whl && rm /tmp/*.whl \
+RUN pip install /tmp/*.whl faiss-cpu==1.15.1 && rm /tmp/*.whl \
  && useradd --uid 10001 --create-home --shell /usr/sbin/nologin inferscale
 USER 10001
 EXPOSE 8080

@@ -33,6 +33,15 @@ gateway:
   maxInflight: 256
   requestTimeoutSeconds: 300
   logLevel: info
+  # Agentic RAG endpoint (/v1/agent/chat). The default corpus is the project's
+  # docs, bundled in the image. "hashing" needs no model download, which keeps
+  # the root filesystem read-only; the semantic embedder needs an image built
+  # with the "semantic" extra and a writable model cache.
+  rag:
+    enabled: true
+    embedder: hashing
+    maxSteps: 3
+    topK: 4
   # Only used when both engines are disabled (mock mode).
   mock:
     ttftMs: 40
