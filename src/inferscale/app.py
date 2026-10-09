@@ -17,7 +17,14 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from inferscale import __version__
-from inferscale.backends import Backend, BackendError, Delta, GenerationParams, build_backends
+from inferscale.backends import (
+    Backend,
+    BackendError,
+    Delta,
+    GenerationParams,
+    ReplicaPool,
+    build_backends,
+)
 from inferscale.config import Settings
 from inferscale.metrics import Metrics
 from inferscale.rag.agent import RagAgent
@@ -100,7 +107,8 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = not hasattr(app.state, "backends")
         if owned:
-            app.state.backends = build_backends(settings)
+            app.state.backends = build_backends(settings, metrics)
+        await asyncio.gather(*(b.start() for b in app.state.backends.values()))
         log.info("serving %s via backends=%s", settings.model_name, list(app.state.backends))
         if settings.rag_enabled and not hasattr(app.state, "store"):
             corpus = [settings.rag_corpus] if settings.rag_corpus else None
@@ -142,7 +150,15 @@ def create_app(
         results = await asyncio.gather(*(app.state.backends[n].ready() for n in names))
         status = dict(zip(names, results, strict=True))
         ready = status[settings.default_backend]
-        return JSONResponse({"ready": ready, "backends": status}, status_code=200 if ready else 503)
+        pools = {
+            n: app.state.backends[n].status()
+            for n in names
+            if isinstance(app.state.backends[n], ReplicaPool)
+        }
+        body: dict[str, Any] = {"ready": ready, "backends": status}
+        if pools:
+            body["replicas"] = pools
+        return JSONResponse(body, status_code=200 if ready else 503)
 
     @app.get("/metrics")
     async def prometheus() -> PlainTextResponse:

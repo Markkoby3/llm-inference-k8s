@@ -9,8 +9,8 @@ import pytest
 import respx
 
 from inferscale.backends import BackendError, GenerationParams
+from inferscale.backends.openai_compat import VLLMBackend
 from inferscale.backends.triton import TritonBackend, _IncrementalText
-from inferscale.backends.vllm import VLLMBackend
 from inferscale.schemas import ChatMessage
 
 MESSAGES = [ChatMessage(role="user", content="What is Triton?")]

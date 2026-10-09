@@ -51,3 +51,16 @@ def render(messages: Sequence[ChatMessage], template: str) -> str:
         raise ValueError(
             f"unknown chat template {template!r}; expected one of {sorted(TEMPLATES)}"
         ) from None
+
+
+def prefix_key(messages: Sequence[ChatMessage], chars: int = 1024) -> str:
+    """The cacheable prefix of a conversation: everything before the newest
+    message (system prompt, instructions, earlier turns), cut to ``chars``.
+
+    Engines with prefix caching (vLLM, TensorRT-LLM) reuse KV blocks for a shared
+    leading token sequence. Two requests with the same key share that sequence,
+    so sending them to the same replica turns the second prefill into a cache hit.
+    A single-message request has no stable prefix, so its own text is the key.
+    """
+    stable = messages[:-1] if len(messages) > 1 else messages
+    return "".join(f"{m.role}\x1f{m.content}\x1e" for m in stable)[:chars]

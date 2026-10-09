@@ -1,10 +1,15 @@
-"""Adapter for vLLM's OpenAI-compatible server (``vllm serve``)."""
+"""Adapters for engines that speak the OpenAI chat completions API.
+
+vLLM's server (``vllm serve``) and NVIDIA NIM both expose ``/v1/chat/completions``
+with SSE streaming, so they share one implementation and differ only in health
+checks, authentication and naming.
+"""
 
 from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
@@ -18,19 +23,14 @@ from inferscale.backends.base import Backend, BackendError, Completion, Delta, G
 from inferscale.schemas import ChatMessage
 
 
-class VLLMBackend(Backend):
-    name = "vllm"
+class OpenAICompatBackend(Backend):
+    name: ClassVar[str] = "openai"
+    health_path: ClassVar[str] = "/health"
 
-    def __init__(self, client: httpx.AsyncClient, model: str):
+    def __init__(self, client: httpx.AsyncClient, model: str, health_path: str | None = None):
         self._client = client
         self._model = model
-
-    @classmethod
-    def from_settings(cls, settings: Any) -> VLLMBackend:
-        client = build_client(
-            settings.vllm_url, settings.connect_timeout_s, settings.request_timeout_s
-        )
-        return cls(client, settings.vllm_model)
+        self._health_path = health_path or self.health_path
 
     def _payload(
         self, messages: Sequence[ChatMessage], params: GenerationParams, stream: bool
@@ -72,7 +72,9 @@ class VLLMBackend(Backend):
                 completion_tokens=usage.get("completion_tokens"),
             )
         except (KeyError, IndexError, TypeError) as exc:
-            raise BackendError(f"vllm returned an unexpected body: {body!r:.300}", 502) from exc
+            raise BackendError(
+                f"{self.name} returned an unexpected body: {body!r:.300}", 502
+            ) from exc
 
     async def stream(
         self, messages: Sequence[ChatMessage], params: GenerationParams
@@ -89,7 +91,7 @@ class VLLMBackend(Backend):
                         break
                     chunk = json.loads(data)
                     if "error" in chunk:
-                        raise BackendError(f"vllm stream error: {chunk['error']}", 502)
+                        raise BackendError(f"{self.name} stream error: {chunk['error']}", 502)
                     usage = chunk.get("usage")
                     if usage and not chunk.get("choices"):
                         # Final usage-only chunk requested via stream_options.
@@ -105,15 +107,46 @@ class VLLMBackend(Backend):
                         finish_reason = choice.get("finish_reason") or finish_reason
                         if text:
                             yield Delta(text)
-        # Older vLLM builds ignore stream_options and never send a usage chunk.
+        # Some servers ignore stream_options and never send a usage chunk.
         yield Delta("", finish_reason=finish_reason or "stop")
 
     async def ready(self) -> bool:
         try:
-            response = await self._client.get("/health", timeout=2.0)
+            response = await self._client.get(self._health_path, timeout=2.0)
         except httpx.HTTPError:
             return False
         return response.status_code == 200
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+class VLLMBackend(OpenAICompatBackend):
+    """vLLM's OpenAI-compatible server (``vllm serve``)."""
+
+    name = "vllm"
+    health_path = "/health"
+
+    @classmethod
+    def for_url(cls, settings: Any, url: str) -> VLLMBackend:
+        client = build_client(url, settings.connect_timeout_s, settings.request_timeout_s)
+        return cls(client, settings.vllm_model)
+
+
+class NIMBackend(OpenAICompatBackend):
+    """NVIDIA NIM: a self-hosted NIM container, or the hosted API catalog.
+
+    Self-hosted NIM serves ``/v1/health/ready``. The hosted endpoint
+    (``https://integrate.api.nvidia.com``) needs an API key and has no health
+    route, so set ``INFERSCALE_NIM_HEALTH_PATH=/v1/models`` there.
+    """
+
+    name = "nim"
+    health_path = "/v1/health/ready"
+
+    @classmethod
+    def for_url(cls, settings: Any, url: str) -> NIMBackend:
+        client = build_client(url, settings.connect_timeout_s, settings.request_timeout_s)
+        if settings.nim_api_key:
+            client.headers["Authorization"] = f"Bearer {settings.nim_api_key}"
+        return cls(client, settings.nim_model, settings.nim_health_path or None)

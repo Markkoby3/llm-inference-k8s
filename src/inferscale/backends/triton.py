@@ -59,10 +59,8 @@ class TritonBackend(Backend):
         render([ChatMessage(role="user", content="")], chat_template)  # fail fast on bad config
 
     @classmethod
-    def from_settings(cls, settings: Any) -> TritonBackend:
-        client = build_client(
-            settings.triton_url, settings.connect_timeout_s, settings.request_timeout_s
-        )
+    def for_url(cls, settings: Any, url: str) -> TritonBackend:
+        client = build_client(url, settings.connect_timeout_s, settings.request_timeout_s)
         return cls(client, settings.triton_model, settings.triton_chat_template)
 
     def _stops(self, params: GenerationParams) -> tuple[str, ...]:

@@ -63,3 +63,28 @@ class Metrics:
             buckets=(0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32),
             registry=self.registry,
         )
+        self.routing_decisions = Counter(
+            "inferscale_routing_decisions_total",
+            "Replica choices: 'affinity' = the prefix's preferred replica, "
+            "'spill' = load bound hit, sent to the next one.",
+            ["backend", "policy", "decision"],
+            registry=self.registry,
+        )
+        self.replica_requests = Counter(
+            "inferscale_replica_requests_total",
+            "Requests sent to each engine replica.",
+            ["backend", "replica"],
+            registry=self.registry,
+        )
+        self.replica_inflight = Gauge(
+            "inferscale_replica_inflight_requests",
+            "Requests in flight per engine replica.",
+            ["backend", "replica"],
+            registry=self.registry,
+        )
+        self.replica_failovers = Counter(
+            "inferscale_replica_failovers_total",
+            "Replicas taken out of rotation after refusing connections.",
+            ["backend"],
+            registry=self.registry,
+        )

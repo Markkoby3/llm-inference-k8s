@@ -72,5 +72,8 @@ class Backend(ABC):
     async def ready(self) -> bool:
         """True when the backend can serve traffic right now."""
 
+    async def start(self) -> None:  # noqa: B027 - optional hook
+        """Begin background work (e.g. replica discovery). Called once at startup."""
+
     async def aclose(self) -> None:  # noqa: B027 - optional hook
         """Release connections. Override when the adapter holds resources."""
