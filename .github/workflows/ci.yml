@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and test (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
+
+  helm:
+    name: Lint and validate Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar xz -C /usr/local/bin kubeconform
+      - name: Lint and validate every values profile
+        run: |
+          chart=deploy/helm/inferscale
+          for profile in "" "-f $chart/values-mock.yaml" "-f $chart/values-single-gpu.yaml" \
+              "--set vllm.autoscaling.enabled=true --set triton.autoscaling.enabled=true"; do
+            echo "::group::profile: ${profile:-default}"
+            helm lint --strict $chart $profile
+            helm template ci $chart $profile \
+              | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
+            echo "::endgroup::"
+          done
+      - name: Misconfiguration is rejected
+        run: |
+          if helm template ci deploy/helm/inferscale --set vllm.enabled=false \
+              --set gateway.defaultBackend=vllm >/dev/null 2>&1; then
+            echo "expected render to fail when the default backend is disabled"; exit 1
+          fi
+
+  e2e:
+    name: End-to-end on kind (mock backend)
+    runs-on: ubuntu-latest
+    needs: [test, helm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: Build gateway image
+        run: docker build -t inferscale-gateway:dev .
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: inferscale
+          config: deploy/kind/kind-config.yaml
+      - name: Deploy
+        run: |
+          kind load docker-image inferscale-gateway:dev --name inferscale
+          helm install inferscale deploy/helm/inferscale -f deploy/helm/inferscale/values-mock.yaml \
+            --wait --timeout 3m
+      - name: Smoke test and short benchmark through the cluster
+        run: |
+          kubectl port-forward svc/inferscale-gateway 8080:80 >/tmp/pf.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS localhost:8080/readyz && break; sleep 1; done
+          curl -fsS localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+            -d '{"messages":[{"role":"user","content":"ping"}],"max_tokens":8}'
+          pip install -e .
+          inferscale-bench run --url http://localhost:8080 --label kind-mock \
+            --concurrency 1,8 --requests 40 --warmup 4 --max-tokens 32 --out benchmarks/results
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -o wide
+          kubectl describe pods
+          kubectl logs -l app.kubernetes.io/component=gateway --tail=200
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kind-mock-benchmark
+          path: benchmarks/results/
+          if-no-files-found: ignore

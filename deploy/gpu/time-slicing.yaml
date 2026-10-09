@@ -1,0 +1,10 @@
+# NVIDIA device-plugin config: advertise one physical GPU as 2 schedulable
+# nvidia.com/gpu resources so vLLM and Triton can share a single-GPU node.
+# Time-slicing shares compute in turns and does NOT isolate memory, which is why
+# values-single-gpu.yaml caps each engine's gpuMemoryUtilization at 0.42.
+version: v1
+sharing:
+  timeSlicing:
+    resources:
+      - name: nvidia.com/gpu
+        replicas: 2
