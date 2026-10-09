@@ -1,4 +1,4 @@
-"""CLI: ``inferscale-bench run | agent | retrieval | compare``."""
+"""CLI: ``inferscale-bench run | agent | retrieval | routing | compare``."""
 
 from __future__ import annotations
 
@@ -77,6 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
     retrieval.add_argument("--embedder", default="hashing")
     retrieval.add_argument("--index", default="auto")
     retrieval.add_argument("--out", help="also write the JSON report here")
+
+    routing = sub.add_parser(
+        "routing", help="compare replica routing policies in a prefix-cache simulation"
+    )
+    routing.add_argument("--replicas", type=int, default=4)
+    routing.add_argument("--prefixes", type=int, default=64)
+    routing.add_argument("--zipf", type=float, default=1.1, help="prefix popularity skew")
+    routing.add_argument("--cache", type=int, default=8, help="cached prefixes per replica")
+    routing.add_argument("--slots", type=int, default=8, help="batch slots per replica")
+    routing.add_argument("--requests", type=int, default=2000)
+    routing.add_argument("--concurrency", type=int, default=28)
+    routing.add_argument("--seed", type=int, default=0)
 
     compare = sub.add_parser("compare", help="side-by-side table from saved run JSON files")
     compare.add_argument("files", nargs="+")
@@ -202,6 +214,22 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
         if args.out:
             Path(args.out).write_text(text + "\n", encoding="utf-8")
+        return 0
+
+    if args.command == "routing":
+        from inferscale.bench.routing import Workload, compare, markdown
+
+        workload = Workload(
+            replicas=args.replicas,
+            prefixes=args.prefixes,
+            zipf_s=args.zipf,
+            cache_per_replica=args.cache,
+            slots_per_replica=args.slots,
+            requests=args.requests,
+            concurrency=args.concurrency,
+            seed=args.seed,
+        )
+        print(markdown(asyncio.run(compare(workload)), workload))
         return 0
 
     table = compare_markdown(load_run(f) for f in args.files)
