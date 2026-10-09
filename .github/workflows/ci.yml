@@ -46,7 +46,10 @@ jobs:
         run: |
           chart=deploy/helm/inferscale
           for profile in "" "-f $chart/values-mock.yaml" "-f $chart/values-single-gpu.yaml" \
-              "--set vllm.autoscaling.enabled=true --set triton.autoscaling.enabled=true"; do
+              "--set vllm.autoscaling.enabled=true --set triton.autoscaling.enabled=true" \
+              "--set vllm.replicas=3 --set metrics.serviceMonitor.enabled=true" \
+              "--set nim.enabled=true --set nim.externalUrl=https://integrate.api.nvidia.com" \
+              "--set nim.enabled=true --set vllm.enabled=false --set triton.enabled=false --set gateway.defaultBackend=nim"; do
             echo "::group::profile: ${profile:-default}"
             helm lint --strict $chart $profile
             helm template ci $chart $profile \
@@ -101,6 +104,21 @@ jobs:
             | python -c "import json,sys; b=json.load(sys.stdin); assert b['citations'], b; print(b['steps'], b['timings_ms'])"
           inferscale-bench agent --url http://localhost:8080 --label kind-mock \
             --concurrency 1,4 --requests 12 --max-tokens 16 --out benchmarks/results
+      - name: Replica routing through the cluster
+        run: |
+          curl -fsS localhost:8080/healthz || {
+            kubectl port-forward svc/inferscale-gateway 8080:80 >/tmp/pf3.log 2>&1 & sleep 3; }
+          for i in $(seq 1 12); do
+            curl -fsS localhost:8080/v1/chat/completions -H 'Content-Type: application/json' \
+              -d "{\"messages\":[{\"role\":\"system\",\"content\":\"shared agent prompt\"},{\"role\":\"user\",\"content\":\"q$i\"}],\"max_tokens\":4}" >/dev/null
+          done
+          curl -fsS localhost:8080/readyz | python -c "
+          import json, sys
+          r = json.load(sys.stdin)['replicas']['mock']['replicas']
+          print(r)
+          assert len(r) == 3
+          assert max(x['requests'] for x in r) >= 12, 'shared prefix should stick to one replica'
+          "
       - name: Diagnostics on failure
         if: failure()
         run: |

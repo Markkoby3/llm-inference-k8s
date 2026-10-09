@@ -14,6 +14,13 @@ gateway:
     pullPolicy: Never  # image is side-loaded with `kind load docker-image`
   replicas: 1
   defaultBackend: mock
+  # Three simulated replicas with a prefix cache, so CI exercises replica routing.
+  mock:
+    ttftMs: 40
+    interTokenMs: 8
+    replicas: 3
+    prefixCacheSize: 8
+    prefillMsPerKchar: 20
   autoscaling:
     enabled: false
   podDisruptionBudget:

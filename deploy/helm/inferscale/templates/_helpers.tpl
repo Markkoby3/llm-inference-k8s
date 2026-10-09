@@ -33,15 +33,47 @@ app.kubernetes.io/component: {{ .component }}
 
 {{/* Comma-separated backend list the gateway is configured with. */}}
 {{- define "inferscale.backends" -}}
-{{- if and .Values.vllm.enabled .Values.triton.enabled -}}
-vllm,triton
-{{- else if .Values.vllm.enabled -}}
-vllm
-{{- else if .Values.triton.enabled -}}
-triton
-{{- else -}}
-mock
+{{- $b := "" -}}
+{{- if .Values.vllm.enabled }}{{ $b = printf "%s,vllm" $b }}{{ end -}}
+{{- if .Values.triton.enabled }}{{ $b = printf "%s,triton" $b }}{{ end -}}
+{{- if .Values.nim.enabled }}{{ $b = printf "%s,nim" $b }}{{ end -}}
+{{- default "mock" (trimPrefix "," $b) -}}
 {{- end -}}
+
+{{/*
+Engine URL for the gateway. With more than one replica (or autoscaling) the
+gateway discovers pods through the headless Service and routes per request
+(prefix affinity), instead of letting the ClusterIP Service spread connections
+at random and waste each pod's prefix cache.
+Pass (dict "ctx" $ "component" "vllm").
+*/}}
+{{- define "inferscale.engineUrl" -}}
+{{- $values := index .ctx.Values .component -}}
+{{- $fullname := include "inferscale.fullname" .ctx -}}
+{{- if or (gt (int $values.replicas) 1) $values.autoscaling.enabled -}}
+dns://{{ $fullname }}-{{ .component }}-headless:8000
+{{- else -}}
+http://{{ $fullname }}-{{ .component }}:8000
+{{- end -}}
+{{- end -}}
+
+{{/* Headless Service: one DNS record per ready engine pod, for replica routing. */}}
+{{- define "inferscale.headlessService" -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "inferscale.fullname" .ctx }}-{{ .component }}-headless
+  labels:
+    {{- include "inferscale.labels" .ctx | nindent 4 }}
+    app.kubernetes.io/component: {{ .component }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "inferscale.selectorLabels" (dict "ctx" .ctx "component" .component) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
 {{- end -}}
 
 {{- define "inferscale.defaultBackend" -}}

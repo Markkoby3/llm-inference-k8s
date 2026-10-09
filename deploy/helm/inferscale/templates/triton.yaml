@@ -121,6 +121,8 @@ spec:
     - name: metrics
       port: 8002
       targetPort: metrics
+---
+{{ include "inferscale.headlessService" (dict "ctx" . "component" "triton") }}
 {{- with .Values.triton.autoscaling }}
 {{- if .enabled }}
 ---

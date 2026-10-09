@@ -82,6 +82,8 @@ spec:
     - name: http
       port: 8000
       targetPort: http
+---
+{{ include "inferscale.headlessService" (dict "ctx" . "component" "vllm") }}
 {{- with .Values.vllm.autoscaling }}
 {{- if .enabled }}
 ---

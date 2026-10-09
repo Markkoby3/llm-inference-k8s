@@ -1,0 +1,89 @@
+{{- if and .Values.nim.enabled (not .Values.nim.externalUrl) -}}
+{{- $fullname := include "inferscale.fullname" . -}}
+{{- $sel := dict "ctx" . "component" "nim" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-nim
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nim
+spec:
+  replicas: {{ .Values.nim.replicas }}
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" $sel | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "inferscale.selectorLabels" $sel | nindent 8 }}
+    spec:
+      {{- include "inferscale.engineScheduling" . | nindent 6 }}
+      {{- with .Values.nim.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: nim
+          image: "{{ .Values.nim.image.repository }}:{{ .Values.nim.image.tag }}"
+          imagePullPolicy: {{ .Values.nim.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+          {{- if .Values.nim.apiKeySecret }}
+          env:
+            - name: NGC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nim.apiKeySecret }}
+                  key: NGC_API_KEY
+                  optional: true
+          {{- end }}
+          # First start downloads and optimizes the model: allow up to 30 min.
+          startupProbe:
+            httpGet: {path: /v1/health/ready, port: http}
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet: {path: /v1/health/ready, port: http}
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /v1/health/live, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.nim.resources | nindent 12 }}
+          volumeMounts:
+            - name: nim-cache
+              mountPath: /opt/nim/.cache
+            - name: dshm
+              mountPath: /dev/shm
+      volumes:
+        - name: nim-cache
+          emptyDir:
+            sizeLimit: {{ .Values.model.cache.sizeLimit }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.gpu.shmSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-nim
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nim
+spec:
+  selector:
+    {{- include "inferscale.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+{{ include "inferscale.headlessService" (dict "ctx" . "component" "nim") }}
+{{- end }}

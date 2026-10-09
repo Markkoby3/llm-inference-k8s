@@ -3,9 +3,10 @@
 [![CI](https://github.com/Markkoby3/llm-inference-k8s/actions/workflows/ci.yml/badge.svg)](https://github.com/Markkoby3/llm-inference-k8s/actions/workflows/ci.yml)
 
 Production-grade LLM serving on Kubernetes: an OpenAI-compatible gateway over
-pluggable **vLLM** and **NVIDIA Triton Inference Server** backends, with Helm
-deployment, GPU autoscaling, an agentic RAG endpoint, and a reproducible
-throughput and latency benchmark suite.
+pluggable **vLLM**, **NVIDIA Triton Inference Server** and **NVIDIA NIM**
+backends, with prefix-cache-aware replica routing, Helm deployment, GPU
+autoscaling, an agentic RAG endpoint, and a reproducible throughput and latency
+benchmark suite.
 
 The question it answers: *with the model, GPU and engine held constant, what does
 the serving layer cost?* Both backends run the same vLLM engine on the same weights,
@@ -21,6 +22,7 @@ flowchart LR
       G[Gateway<br/>FastAPI, N replicas<br/>HPA on CPU]
       G -->|OpenAI API| V[vLLM server<br/>GPU, HPA on queue depth]
       G -->|generate / generate_stream| T[Triton + vLLM backend<br/>GPU, HPA on queue depth]
+      G -->|OpenAI API| N[NVIDIA NIM<br/>self-hosted or hosted API]
       G --- R[(FAISS index<br/>agentic RAG)]
       P[(Prometheus)] -.scrapes.-> G & V & T
       A[prometheus-adapter] -.custom metrics.-> H[HPAs]
@@ -38,6 +40,12 @@ default). The gateway handles:
   time out.
 - **Honest errors.** Waits for the first token before committing to a `200`, so a dead engine
   returns a real `503`, not a broken stream.
+- **Prefix-aware replica routing.** With several engine replicas, rendezvous hashing with a load
+  bound sends requests that share a prompt prefix to the same replica so they hit its KV cache;
+  replicas are discovered from a headless Service and drain on scale-down
+  ([details and simulation results](docs/replica-routing.md)).
+- **NVIDIA NIM.** Route to a self-hosted NIM container or NVIDIA's hosted API with the same client
+  code.
 - **Agentic RAG.** `/v1/agent/chat` runs a multi-step agent that decides what to search, retrieves
   passages from a FAISS index and answers with citations ([details](docs/agentic-rag.md)).
 - **Observability.** Prometheus metrics for time-to-first-token, latency, tokens, in-flight
@@ -91,6 +99,7 @@ reply = client.chat.completions.create(
 | kind (CPU, mock backend) | `make kind-up kind-deploy` |
 | One GPU (k3s, both engines time-sliced) | see [GPU runbook](docs/gpu-benchmark-runbook.md#path-b-k3s--helm) |
 | GPU cluster (one GPU per engine) | `helm install inferscale deploy/helm/inferscale` |
+| Add NVIDIA's hosted NIM API | `--set nim.enabled=true --set nim.externalUrl=https://integrate.api.nvidia.com --set nim.apiKeySecret=<secret>` |
 | One GPU, no Kubernetes | `docker compose -f deploy/compose/docker-compose.gpu.yaml up -d` |
 
 The chart deploys:
@@ -125,7 +134,8 @@ Fairness rules (details in [design decisions](docs/design-decisions.md#3-benchma
 - Warmup requests before each level.
 - Engines benchmarked one at a time.
 
-The agent endpoint has its own harness: `inferscale-bench agent` breaks latency down into
+`inferscale-bench routing` compares replica routing policies in a prefix-cache simulation
+([results](docs/replica-routing.md#measured-in-a-simulation)). The agent endpoint has its own harness: `inferscale-bench agent` breaks latency down into
 planning, retrieval and generation, and `inferscale-bench retrieval` measures recall@k and MRR
 of the vector search on a labeled question set ([results](docs/agentic-rag.md#retrieval-quality)).
 
@@ -149,6 +159,8 @@ of the vector search on a labeled question set ([results](docs/agentic-rag.md#re
 | `inferscale_rejected_total` | counter | Requests shed with `429` |
 | `inferscale_agent_stage_seconds{backend,stage}` | histogram | Agent time in `plan`, `retrieve`, `generate` |
 | `inferscale_agent_steps{backend}` | histogram | Planning steps per agent request |
+| `inferscale_routing_decisions_total{backend,policy,decision}` | counter | Replica routing: `affinity` or `spill` |
+| `inferscale_replica_inflight_requests{backend,replica}` | gauge | Load per engine replica |
 
 The engines' own metrics (`vllm:*`, `nv_inference_*`) are scraped alongside these.
 
@@ -158,9 +170,11 @@ All gateway settings are environment variables. The Helm chart sets them from `v
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `INFERSCALE_BACKENDS` | `mock` | Comma-separated: `vllm`, `triton`, `mock` |
+| `INFERSCALE_BACKENDS` | `mock` | Comma-separated: `vllm`, `triton`, `nim`, `mock` |
 | `INFERSCALE_DEFAULT_BACKEND` | first listed | Used when no routing header is sent |
-| `INFERSCALE_VLLM_URL` / `INFERSCALE_TRITON_URL` | in-cluster services | Engine endpoints |
+| `INFERSCALE_VLLM_URL` / `_TRITON_URL` / `_NIM_URL` | in-cluster services | One URL, a comma-separated replica list, or `dns://host:port` |
+| `INFERSCALE_NIM_API_KEY` (or `NVIDIA_API_KEY`) | none | Key for NVIDIA's hosted API |
+| `INFERSCALE_ROUTING_POLICY` | `prefix_affinity` | `prefix_affinity`, `least_inflight` or `round_robin` |
 | `INFERSCALE_TRITON_MODEL` | `llm` | Model name in Triton's repository |
 | `INFERSCALE_TRITON_CHAT_TEMPLATE` | `chatml` | `chatml`, `llama3` or `plain`; must match the model |
 | `INFERSCALE_MAX_INFLIGHT` | `256` | Admission limit per pod (`0` = unlimited) |
@@ -172,7 +186,7 @@ All gateway settings are environment variables. The Helm chart sets them from `v
 ```
 src/inferscale/
   app.py             FastAPI app: routing, streaming, admission control, metrics
-  backends/          Adapter interface + vLLM, Triton and mock adapters
+  backends/          Adapter interface; vLLM, NIM, Triton and mock adapters; replica pool
   prompt.py          Chat templates for Triton
   stops.py           Streaming-safe stop-sequence filter
   rag/               Chunking, embeddings, FAISS index, agent loop, retrieval evaluation
@@ -184,7 +198,7 @@ deploy/
   kind/              Local cluster config
 triton/              Triton model repository for Docker runs
 benchmarks/rag/      Labeled questions for retrieval evaluation
-docs/                Agentic RAG, runbook, autoscaling, design decisions
+docs/                Agentic RAG, replica routing, runbook, autoscaling, design decisions
 tests/               Gateway, adapter, filter and harness tests (no GPU required)
 ```
 
@@ -209,7 +223,9 @@ CI runs on every push:
       per-stage latency of multi-step pipelines
 - [ ] Publish agent latency on GPU (vLLM vs. Triton) and compare dense embeddings
 - [ ] TensorRT-LLM backend for Triton as a separate engine-level comparison
-- [ ] KV-cache-aware routing across engine replicas
+- [x] Prefix-cache-aware routing across engine replicas, with headless-Service discovery
+- [x] NVIDIA NIM backend (self-hosted or hosted API)
+- [ ] Measure prefix-affinity routing on real GPU replicas
 - [ ] OpenTelemetry tracing from gateway to engine
 
 ## License

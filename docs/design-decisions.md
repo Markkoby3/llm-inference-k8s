@@ -102,3 +102,31 @@ search with the user's question rather than failing the request.
 
 **Trade-off.** Constrained decoding (vLLM `guided_json`) would guarantee valid
 JSON on vLLM, but not on Triton, which would make the comparison unequal.
+
+## 10. The gateway routes to replicas; the Service does not
+
+**Decision.** With several replicas of an engine, the gateway resolves the pods
+through a headless Service and picks a replica per request (bounded prefix
+affinity by default) instead of sending traffic to a ClusterIP Service.
+
+**Why.** kube-proxy balances connections, not requests, and knows nothing about
+prompts. Engines cache KV blocks for prompt prefixes they have seen, so placing
+requests that share a prefix on the same pod turns repeated prefill into cache
+hits ([replica routing](replica-routing.md)). Rendezvous hashing keeps that
+placement stable as the HPA adds and removes pods, and a load bound keeps a
+popular prefix from overloading one pod.
+
+**Cost.** The gateway now owns membership and health. It re-resolves DNS every
+10 s, takes replicas that refuse connections out of rotation, retries
+connection failures once, and drains replicas that leave.
+
+## 11. NIM through the same OpenAI-compatible adapter as vLLM
+
+**Decision.** NVIDIA NIM is a backend that shares vLLM's adapter, differing only
+in its health route and API-key header.
+
+**Why.** NIM exposes the OpenAI chat completions API, so the same request
+handling, streaming, metrics and agent work unchanged, and one deployment can
+compare a self-built vLLM stack, Triton and NIM side by side. Pointing it at
+NVIDIA's hosted API needs no GPU at all, which makes it a quick way to run the
+agent endpoint against a production model.

@@ -46,6 +46,10 @@ gateway:
   mock:
     ttftMs: 40
     interTokenMs: 8
+    # >1 simulates several engine replicas behind the router (with a prefix cache).
+    replicas: 1
+    prefixCacheSize: 0
+    prefillMsPerKchar: 0
   service:
     type: ClusterIP
     port: 80
@@ -121,6 +125,40 @@ triton:
     metricName: nv_inference_pending_request_count
     targetAverageValue: "4"
     scaleDownStabilizationSeconds: 300
+
+# NVIDIA NIM: either a self-hosted NIM pod (needs an NGC pull secret and a GPU)
+# or NVIDIA's hosted API (set externalUrl). Requests reach it with the header
+# X-InferScale-Backend: nim.
+nim:
+  enabled: false
+  # e.g. https://integrate.api.nvidia.com to use the hosted API catalog instead
+  # of running a pod. The served model then comes from nim.model.
+  externalUrl: ""
+  model: meta/llama-3.1-8b-instruct
+  # Secret with key NVIDIA_API_KEY (hosted API) and/or NGC_API_KEY (self-hosted).
+  apiKeySecret: ""
+  image:
+    repository: nvcr.io/nim/meta/llama-3.1-8b-instruct
+    tag: "2.0.10"
+    pullPolicy: IfNotPresent
+  # Registry credentials for nvcr.io, e.g. [{name: ngc-registry}].
+  imagePullSecrets: []
+  replicas: 1
+  resources:
+    requests: {cpu: "4", memory: 16Gi}
+    limits: {nvidia.com/gpu: 1, memory: 32Gi}
+  autoscaling:
+    enabled: false
+
+# Request routing across engine replicas (used when an engine has >1 replica or
+# autoscaling). See docs/replica-routing.md.
+routing:
+  # prefix_affinity | least_inflight | round_robin
+  policy: prefix_affinity
+  prefixChars: 1024
+  # Max in-flight load on one replica relative to the pool average before
+  # affinity spills a request to the next replica.
+  loadFactor: 1.25
 
 metrics:
   # Requires the Prometheus Operator CRDs.

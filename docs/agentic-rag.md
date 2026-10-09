@@ -48,7 +48,7 @@ curl -s localhost:8080/v1/agent/chat -H 'Content-Type: application/json' -d '{
     {"action": "answer", "query": null, "new_passages": 0, "plan_ms": 40.9, "retrieve_ms": 0.0}
   ],
   "timings_ms": {"plan": 82.1, "retrieve": 0.6, "generate": 230.4, "total": 313.5},
-  "retrieval": {"chunks": 47, "sources": 5, "embedder": "hashing", "index": "faiss"}
+  "retrieval": {"chunks": 58, "sources": 6, "embedder": "hashing", "index": "faiss"}
 }
 ```
 
@@ -95,10 +95,10 @@ section. Reproduce with `inferscale-bench retrieval`.
 
 | Embedder | Recall@1 | Recall@3 | Recall@5 | MRR | Search p50 |
 |---|---:|---:|---:|---:|---:|
-| Hashing, no stemming | 0.58 | 0.75 | 0.83 | 0.68 | 0.07 ms |
-| Hashing + stemming (default) | 0.62 | 0.88 | 0.88 | 0.74 | 0.07 ms |
+| Hashing, no stemming | 0.58 | 0.79 | 0.79 | 0.67 | 0.07 ms |
+| Hashing + stemming (default) | 0.71 | 0.88 | 0.88 | 0.79 | 0.07 ms |
 
-Measured over the full bundled corpus (all docs plus the README, 47 chunks).
+Measured over the full bundled corpus (all docs plus the README, 58 chunks).
 Caveats: 24 questions is a small, in-domain set, so treat differences of one or
 two questions as noise. The test suite fails if recall@5 drops below 0.85 or MRR
 below 0.7, so retrieval changes cannot silently regress it. Dense embeddings

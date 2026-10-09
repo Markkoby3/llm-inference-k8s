@@ -57,18 +57,41 @@ spec:
               value: {{ .Values.gateway.logLevel | quote }}
             {{- if .Values.vllm.enabled }}
             - name: INFERSCALE_VLLM_URL
-              value: "http://{{ $fullname }}-vllm:8000"
+              value: {{ include "inferscale.engineUrl" (dict "ctx" . "component" "vllm") | quote }}
             - name: INFERSCALE_VLLM_MODEL
               value: {{ .Values.model.servedName | quote }}
             {{- end }}
             {{- if .Values.triton.enabled }}
             - name: INFERSCALE_TRITON_URL
-              value: "http://{{ $fullname }}-triton:8000"
+              value: {{ include "inferscale.engineUrl" (dict "ctx" . "component" "triton") | quote }}
             - name: INFERSCALE_TRITON_MODEL
               value: {{ .Values.triton.modelName | quote }}
             - name: INFERSCALE_TRITON_CHAT_TEMPLATE
               value: {{ .Values.triton.chatTemplate | quote }}
             {{- end }}
+            {{- if .Values.nim.enabled }}
+            - name: INFERSCALE_NIM_URL
+              value: {{ .Values.nim.externalUrl | default (include "inferscale.engineUrl" (dict "ctx" . "component" "nim")) | quote }}
+            - name: INFERSCALE_NIM_MODEL
+              value: {{ .Values.nim.model | quote }}
+            {{- if .Values.nim.externalUrl }}
+            - name: INFERSCALE_NIM_HEALTH_PATH
+              value: /v1/models
+            {{- end }}
+            {{- if .Values.nim.apiKeySecret }}
+            - name: INFERSCALE_NIM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.nim.apiKeySecret }}
+                  key: NVIDIA_API_KEY
+            {{- end }}
+            {{- end }}
+            - name: INFERSCALE_ROUTING_POLICY
+              value: {{ .Values.routing.policy | quote }}
+            - name: INFERSCALE_ROUTING_PREFIX_CHARS
+              value: {{ .Values.routing.prefixChars | quote }}
+            - name: INFERSCALE_ROUTING_LOAD_FACTOR
+              value: {{ .Values.routing.loadFactor | quote }}
             - name: INFERSCALE_RAG_ENABLED
               value: {{ .Values.gateway.rag.enabled | quote }}
             - name: INFERSCALE_RAG_EMBEDDER
@@ -81,6 +104,12 @@ spec:
               value: {{ .Values.gateway.mock.ttftMs | quote }}
             - name: INFERSCALE_MOCK_INTER_TOKEN_MS
               value: {{ .Values.gateway.mock.interTokenMs | quote }}
+            - name: INFERSCALE_MOCK_REPLICAS
+              value: {{ .Values.gateway.mock.replicas | quote }}
+            - name: INFERSCALE_MOCK_PREFIX_CACHE_SIZE
+              value: {{ .Values.gateway.mock.prefixCacheSize | quote }}
+            - name: INFERSCALE_MOCK_PREFILL_MS_PER_KCHAR
+              value: {{ .Values.gateway.mock.prefillMsPerKchar | quote }}
           readinessProbe:
             httpGet: {path: /readyz, port: http}
             periodSeconds: 5
