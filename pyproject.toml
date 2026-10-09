@@ -16,10 +16,16 @@ dependencies = [
   "httpx>=0.27",
   "pydantic>=2.6",
   "prometheus-client>=0.20",
+  "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
+# Exact vector search through FAISS (falls back to NumPy without it).
+faiss = ["faiss-cpu>=1.8"]
+# Dense semantic embeddings instead of the default hashing embedder.
+semantic = ["sentence-transformers>=3.0"]
 dev = [
+  "faiss-cpu>=1.8",
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
   "respx>=0.21",
@@ -32,6 +38,12 @@ inferscale-bench = "inferscale.bench.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/inferscale"]
+
+# The project's own documentation ships inside the package as the default
+# corpus for the agent endpoint.
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "inferscale/rag/bundled_docs"
+"README.md" = "inferscale/rag/bundled_docs/README.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

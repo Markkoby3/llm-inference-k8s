@@ -76,3 +76,18 @@ class ErrorBody(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorBody
+
+
+class AgentRequest(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1)
+    max_steps: int | None = Field(default=None, ge=1, le=5)
+    top_k: int | None = Field(default=None, ge=1, le=10)
+    max_tokens: int = Field(default=512, ge=1, le=4096)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+
+    @field_validator("messages")
+    @classmethod
+    def _last_is_user(cls, value: list[ChatMessage]) -> list[ChatMessage]:
+        if value[-1].role != "user":
+            raise ValueError("the last message must come from the user")
+        return value

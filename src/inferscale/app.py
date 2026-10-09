@@ -20,7 +20,10 @@ from inferscale import __version__
 from inferscale.backends import Backend, BackendError, Delta, GenerationParams, build_backends
 from inferscale.config import Settings
 from inferscale.metrics import Metrics
+from inferscale.rag.agent import RagAgent
+from inferscale.rag.store import DocumentStore
 from inferscale.schemas import (
+    AgentRequest,
     ChatCompletionRequest,
     ChatCompletionResponse,
     Choice,
@@ -84,7 +87,9 @@ def _sse(payload: dict[str, Any] | str) -> str:
 
 
 def create_app(
-    settings: Settings | None = None, backends: dict[str, Backend] | None = None
+    settings: Settings | None = None,
+    backends: dict[str, Backend] | None = None,
+    store: DocumentStore | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.validate()
@@ -97,6 +102,12 @@ def create_app(
         if owned:
             app.state.backends = build_backends(settings)
         log.info("serving %s via backends=%s", settings.model_name, list(app.state.backends))
+        if settings.rag_enabled and not hasattr(app.state, "store"):
+            corpus = [settings.rag_corpus] if settings.rag_corpus else None
+            app.state.store = await asyncio.to_thread(
+                DocumentStore.from_paths, corpus, settings.rag_embedder, settings.rag_index
+            )
+            log.info("rag corpus loaded: %s", app.state.store.info())
         try:
             yield
         finally:
@@ -109,6 +120,8 @@ def create_app(
     app.state.admission = admission
     if backends is not None:
         app.state.backends = backends
+    if store is not None:
+        app.state.store = store
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -149,12 +162,9 @@ def create_app(
             ],
         }
 
-    @app.post("/v1/chat/completions", response_model=None)
-    async def chat_completions(
-        body: ChatCompletionRequest,
-        x_inferscale_backend: str | None = Header(default=None),
-    ) -> JSONResponse | StreamingResponse:
-        name = x_inferscale_backend or settings.default_backend
+    def _admit(header: str | None) -> tuple[str, Backend] | JSONResponse:
+        """Resolve the routing header and take an admission slot, or explain why not."""
+        name = header or settings.default_backend
         backend = app.state.backends.get(name)
         if backend is None:
             return error_response(
@@ -171,6 +181,75 @@ def create_app(
                 "overloaded",
                 headers={"Retry-After": "1"},
             )
+        return name, backend
+
+    @app.post("/v1/agent/chat", response_model=None)
+    async def agent_chat(
+        body: AgentRequest,
+        x_inferscale_backend: str | None = Header(default=None),
+    ) -> JSONResponse:
+        store: DocumentStore | None = getattr(app.state, "store", None)
+        if store is None:
+            return error_response(
+                404,
+                "the agent endpoint is disabled (INFERSCALE_RAG_ENABLED=false)",
+                "invalid_request_error",
+                "rag_disabled",
+            )
+        admitted = _admit(x_inferscale_backend)
+        if isinstance(admitted, JSONResponse):
+            return admitted
+        name, backend = admitted
+        agent = RagAgent(
+            backend,
+            store,
+            max_steps=body.max_steps or settings.rag_max_steps,
+            top_k=body.top_k or settings.rag_top_k,
+        )
+        try:
+            result = await agent.run(body.messages, body.max_tokens, body.temperature)
+        except BackendError as exc:
+            metrics.requests.labels(name, "agent", str(exc.status_code)).inc()
+            log.warning("backend=%s agent error=%s", name, exc.message)
+            return error_response(
+                exc.status_code, exc.message, _error_kind(exc.status_code), exc.code
+            )
+        finally:
+            admission.release()
+
+        metrics.requests.labels(name, "agent", "200").inc()
+        metrics.latency.labels(name, "agent").observe(result.timings_ms["total"] / 1000)
+        metrics.agent_steps.labels(name).observe(len(result.steps))
+        for stage in ("plan", "retrieve", "generate"):
+            metrics.agent_stage.labels(name, stage).observe(result.timings_ms[stage] / 1000)
+
+        return JSONResponse(
+            {
+                "id": f"agent-{uuid.uuid4().hex[:24]}",
+                "object": "agent.response",
+                "created": int(time.time()),
+                "model": settings.model_name,
+                "backend": name,
+                "answer": result.answer,
+                "finish_reason": result.finish_reason,
+                "citations": result.citations(),
+                "steps": [step.as_dict() for step in result.steps],
+                "timings_ms": result.timings_ms,
+                "usage": {"completion_tokens": result.completion_tokens},
+                "retrieval": store.info(),
+            },
+            headers={BACKEND_HEADER: name},
+        )
+
+    @app.post("/v1/chat/completions", response_model=None)
+    async def chat_completions(
+        body: ChatCompletionRequest,
+        x_inferscale_backend: str | None = Header(default=None),
+    ) -> JSONResponse | StreamingResponse:
+        admitted = _admit(x_inferscale_backend)
+        if isinstance(admitted, JSONResponse):
+            return admitted
+        name, backend = admitted
 
         params = GenerationParams(
             max_tokens=body.max_tokens,

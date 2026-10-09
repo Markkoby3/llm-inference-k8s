@@ -8,6 +8,7 @@ a fixed time-to-first-token, then a steady inter-token gap.
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import zlib
 from collections.abc import AsyncIterator, Sequence
@@ -49,12 +50,36 @@ class MockBackend(Backend):
         n = params.max_tokens if params.ignore_eos else min(params.max_tokens, _NATURAL_LENGTH)
         return [(" " if i else "") + rng.choice(_VOCAB) for i in range(n)]
 
+    @staticmethod
+    def _agent_reply(messages: Sequence[ChatMessage]) -> str | None:
+        """Play the agent's planner so the multi-step RAG path runs end to end
+        without a GPU: search once with the question's keywords, then answer."""
+        system = messages[0].content if messages and messages[0].role == "system" else ""
+        if '{"action": "answer"}' not in system:
+            return None
+        prompt = messages[-1].content
+        if "(none yet)" not in prompt:
+            return '{"action": "answer"}'
+        question = prompt.partition("Question:")[2].partition("\n")[0]
+        keywords = [w for w in question.split() if len(w) > 3][:6]
+        return json.dumps({"action": "search", "query": " ".join(keywords) or question.strip()})
+
     async def complete(
         self, messages: Sequence[ChatMessage], params: GenerationParams
     ) -> Completion:
+        scripted = self._agent_reply(messages)
+        if scripted is not None:
+            await asyncio.sleep(self._ttft_s)
+            return Completion(
+                scripted, "stop", self._prompt_tokens(messages), len(scripted.split())
+            )
         tokens = self._tokens(messages, params)
         await asyncio.sleep(self._ttft_s + self._itl_s * max(len(tokens) - 1, 0))
         text, matched = StopSequenceFilter(params.stop).apply("".join(tokens))
+        if "[1] (" in messages[-1].content and messages[0].content.startswith(
+            "Answer the question"
+        ):
+            text += " [1]"  # cite like a real model would, so the citation path is exercised
         hit_limit = len(tokens) >= params.max_tokens
         return Completion(
             text=text,

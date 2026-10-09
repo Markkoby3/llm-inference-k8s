@@ -24,6 +24,10 @@ def _env_float(name: str, default: float) -> float:
     return float(_env(name, str(default)))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    return _env(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_list(name: str, default: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in _env(name, default).split(",") if item.strip())
 
@@ -60,6 +64,15 @@ class Settings:
     # instead of queueing unboundedly inside the gateway. 0 disables the limit.
     max_inflight: int = 256
 
+    # Agentic RAG endpoint (/v1/agent/chat). An empty corpus path means the
+    # project's own documentation, which ships inside the package.
+    rag_enabled: bool = True
+    rag_corpus: str = ""
+    rag_embedder: str = "hashing"
+    rag_index: str = "auto"
+    rag_max_steps: int = 3
+    rag_top_k: int = 4
+
     host: str = "0.0.0.0"
     port: int = 8080
     log_level: str = "info"
@@ -81,6 +94,12 @@ class Settings:
             connect_timeout_s=_env_float("CONNECT_TIMEOUT_S", cls.connect_timeout_s),
             request_timeout_s=_env_float("REQUEST_TIMEOUT_S", cls.request_timeout_s),
             max_inflight=_env_int("MAX_INFLIGHT", cls.max_inflight),
+            rag_enabled=_env_bool("RAG_ENABLED", cls.rag_enabled),
+            rag_corpus=_env("RAG_CORPUS", cls.rag_corpus),
+            rag_embedder=_env("RAG_EMBEDDER", cls.rag_embedder),
+            rag_index=_env("RAG_INDEX", cls.rag_index),
+            rag_max_steps=_env_int("RAG_MAX_STEPS", cls.rag_max_steps),
+            rag_top_k=_env_int("RAG_TOP_K", cls.rag_top_k),
             host=_env("HOST", cls.host),
             port=_env_int("PORT", cls.port),
             log_level=_env("LOG_LEVEL", cls.log_level),

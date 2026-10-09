@@ -1,0 +1,24 @@
+{"question": "Why does the gateway send 429 responses instead of queueing requests?", "source": "design-decisions.md", "section": "Shed load"}
+{"question": "What happens if the engine crashes before the first token of a streamed reply?", "source": "design-decisions.md", "section": "Surface upstream failures"}
+{"question": "Why is Triton configured with the vLLM backend rather than TensorRT-LLM?", "source": "design-decisions.md", "section": "Compare serving layers"}
+{"question": "How are stop strings handled when Triton cannot accept a list parameter?", "source": "design-decisions.md", "section": "Stop sequences"}
+{"question": "How does the project count tokens for Triton responses?", "source": "design-decisions.md", "section": "Token accounting"}
+{"question": "Why do the GPU deployments use the Recreate rollout strategy?", "source": "design-decisions.md", "section": "Kubernetes specifics"}
+{"question": "What rules keep the vLLM versus Triton comparison fair?", "source": "design-decisions.md", "section": "fairness"}
+{"question": "Why put a gateway in front of the inference engines at all?", "source": "design-decisions.md", "section": "thin gateway"}
+{"question": "Which signal should scale the GPU engine replicas?", "source": "autoscaling.md", "section": "Autoscaling"}
+{"question": "How do I make vllm:num_requests_waiting available to the HorizontalPodAutoscaler?", "source": "autoscaling.md", "section": "Exposing the metric"}
+{"question": "How should the targetAverageValue for queue depth be chosen?", "source": "autoscaling.md", "section": "Choosing the target"}
+{"question": "Why does scale-down wait five minutes for GPU pods?", "source": "autoscaling.md", "section": "Engine HPA"}
+{"question": "What kind of cloud machine do I need for the GPU benchmark?", "source": "gpu-benchmark-runbook.md", "section": "Machine"}
+{"question": "How can vLLM and Triton both be scheduled on a node with only one GPU?", "source": "gpu-benchmark-runbook.md", "section": "time-slicing"}
+{"question": "How do I load the gateway image into k3s without a registry?", "source": "gpu-benchmark-runbook.md", "section": "Gateway image"}
+{"question": "What should I check before trusting a benchmark run?", "source": "gpu-benchmark-runbook.md", "section": "Sanity checks"}
+{"question": "Where should finished benchmark results be saved and committed?", "source": "gpu-benchmark-runbook.md", "section": "Publish"}
+{"question": "How do I run the benchmark quickly with docker compose?", "source": "gpu-benchmark-runbook.md", "section": "Docker Compose"}
+{"question": "How do I install k3s so it detects the NVIDIA runtime?", "source": "gpu-benchmark-runbook.md", "section": "Kubernetes with GPU support"}
+{"question": "Which Prometheus metric records time to first token?", "source": "README.md", "section": "Observability"}
+{"question": "Which environment variable sets the admission limit per pod?", "source": "README.md", "section": "Configuration"}
+{"question": "Can I try the gateway on a laptop without a GPU?", "source": "README.md", "section": "Quickstart"}
+{"question": "What does the CI pipeline run on every push?", "source": "README.md", "section": "Development"}
+{"question": "What features are planned next for the project?", "source": "README.md", "section": "Roadmap"}

@@ -49,3 +49,17 @@ class Metrics:
             "Requests rejected by admission control (429).",
             registry=self.registry,
         )
+        self.agent_steps = Histogram(
+            "inferscale_agent_steps",
+            "Planning steps per agent request.",
+            ["backend"],
+            buckets=(1, 2, 3, 4, 5),
+            registry=self.registry,
+        )
+        self.agent_stage = Histogram(
+            "inferscale_agent_stage_seconds",
+            "Time per agent stage: plan (LLM), retrieve (vector search), generate (LLM).",
+            ["backend", "stage"],
+            buckets=(0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32),
+            registry=self.registry,
+        )
