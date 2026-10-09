@@ -31,6 +31,9 @@ class RunConfig:
     temperature: float = 0.0
     ignore_eos: bool = True
     backend: str | None = None
+    # Set when benchmarking an engine directly (e.g. vLLM's own server), which
+    # requires the served model name. The gateway ignores it.
+    model: str | None = None
     request_rate: float | None = None
     seed: int = 0
     extra_headers: dict[str, str] = field(default_factory=dict)
@@ -42,7 +45,7 @@ class RunConfig:
         return headers
 
     def payload(self, messages: list[dict[str, str]]) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -51,6 +54,9 @@ class RunConfig:
             # Fixed output length so every backend does the same amount of decode work.
             "ignore_eos": self.ignore_eos,
         }
+        if self.model:
+            payload["model"] = self.model
+        return payload
 
 
 async def _closed_loop(

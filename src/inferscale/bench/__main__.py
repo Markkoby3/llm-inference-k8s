@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--url", default="http://localhost:8080", help="gateway base URL")
     run.add_argument("--backend", help="value for X-InferScale-Backend (default: gateway default)")
     run.add_argument("--label", help="name for this run in reports (default: backend name)")
+    run.add_argument(
+        "--model",
+        help="model name sent with each request (default: discovered from /v1/models); "
+        "lets the harness target an engine's own OpenAI server directly",
+    )
     run.add_argument("--concurrency", type=_int_list, default=[1, 4, 16, 64])
     run.add_argument("--requests", type=int, default=200, help="measured requests per level")
     run.add_argument("--warmup", type=int, default=10, help="discarded requests before each level")
@@ -99,7 +104,9 @@ async def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
 
     levels = []
     async with make_client(args.url, max(args.concurrency), args.timeout) as client:
-        meta["model"] = await _served_model(client)
+        meta["model"] = args.model or await _served_model(client)
+        if meta["model"] != "unknown":
+            cfg.model = meta["model"]
         for concurrency in args.concurrency:
             print(f"[{meta['label']}] concurrency={concurrency} ...", file=sys.stderr, flush=True)
             summary = await run_level(
