@@ -1,0 +1,91 @@
+{{- if .Values.vllm.enabled -}}
+{{- $fullname := include "inferscale.fullname" . -}}
+{{- $sel := dict "ctx" . "component" "vllm" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-vllm
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vllm
+spec:
+  {{- if not .Values.vllm.autoscaling.enabled }}
+  replicas: {{ .Values.vllm.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" $sel | nindent 6 }}
+  strategy:
+    # A new GPU pod cannot start while the old one holds the device.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "inferscale.selectorLabels" $sel | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      {{- include "inferscale.engineScheduling" . | nindent 6 }}
+      containers:
+        - name: vllm
+          image: "{{ .Values.vllm.image.repository }}:{{ .Values.vllm.image.tag }}"
+          imagePullPolicy: {{ .Values.vllm.image.pullPolicy }}
+          command: ["vllm", "serve"]
+          args:
+            - {{ required "model.id is required" .Values.model.id | quote }}
+            - --served-model-name={{ .Values.model.servedName }}
+            - --max-model-len={{ .Values.model.maxModelLen }}
+            - --gpu-memory-utilization={{ .Values.model.gpuMemoryUtilization }}
+            - --host=0.0.0.0
+            - --port=8000
+            {{- range .Values.vllm.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            {{- include "inferscale.engineEnv" . | nindent 12 }}
+          # First start downloads weights and captures CUDA graphs: allow up to 20 min.
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.vllm.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "inferscale.engineVolumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "inferscale.engineVolumes" . | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-vllm
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vllm
+spec:
+  selector:
+    {{- include "inferscale.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- with .Values.vllm.autoscaling }}
+{{- if .enabled }}
+---
+{{ include "inferscale.engineHPA" (dict "ctx" $ "component" "vllm" "autoscaling" .) }}
+{{- end }}
+{{- end }}
+{{- end }}

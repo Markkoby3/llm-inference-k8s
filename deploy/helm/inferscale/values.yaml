@@ -1,0 +1,121 @@
+# Default values: GPU deployment with both engines serving the same model.
+# For a CPU-only cluster (kind, CI) use values-mock.yaml instead.
+
+nameOverride: ""
+fullnameOverride: ""
+
+model:
+  # Hugging Face model id loaded by both engines. Both must serve identical
+  # weights or the vLLM-vs-Triton comparison is meaningless.
+  id: Qwen/Qwen2.5-1.5B-Instruct
+  # Name clients see in /v1/models.
+  servedName: qwen2.5-1.5b-instruct
+  maxModelLen: 4096
+  # Fraction of GPU memory each engine may use (weights + KV cache).
+  gpuMemoryUtilization: 0.85
+  # Existing Secret holding HF_TOKEN, only needed for gated models.
+  hfTokenSecret: ""
+  cache:
+    # Name of an existing PVC for the Hugging Face cache. Empty = emptyDir, which
+    # re-downloads weights whenever a pod starts.
+    persistentVolumeClaim: ""
+    sizeLimit: 40Gi
+
+gateway:
+  image:
+    repository: ghcr.io/markkoby3/inferscale-gateway
+    tag: ""  # defaults to the chart appVersion
+    pullPolicy: IfNotPresent
+  replicas: 2
+  # Backend used when a request has no X-InferScale-Backend header.
+  defaultBackend: vllm
+  # Requests in flight per gateway pod before it sheds load with 429.
+  maxInflight: 256
+  requestTimeoutSeconds: 300
+  logLevel: info
+  # Only used when both engines are disabled (mock mode).
+  mock:
+    ttftMs: 40
+    interTokenMs: 8
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: {cpu: 500m, memory: 256Mi}
+    limits: {memory: 512Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Long-lived streams need time to finish when a pod is replaced.
+  terminationGracePeriodSeconds: 60
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# Settings shared by both GPU engines.
+gpu:
+  # Set to "nvidia" on k3s or any cluster that registers the NVIDIA runtime as a RuntimeClass.
+  runtimeClassName: ""
+  # Size of /dev/shm. Both engines use shared memory for worker communication.
+  shmSize: 8Gi
+  nodeSelector: {}
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+vllm:
+  enabled: true
+  image:
+    repository: vllm/vllm-openai
+    tag: v0.10.1  # pin a tested release; bump deliberately
+    pullPolicy: IfNotPresent
+  replicas: 1
+  extraArgs: []
+  resources:
+    requests: {cpu: "4", memory: 16Gi}
+    limits: {nvidia.com/gpu: 1, memory: 32Gi}
+  # Scale GPU replicas on queue depth, not CPU: a saturated engine shows a growing
+  # waiting queue long before its CPU usage changes. Needs prometheus-adapter to
+  # expose the metric (see docs/autoscaling.md).
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    metricName: vllm_num_requests_waiting
+    targetAverageValue: "4"
+    scaleDownStabilizationSeconds: 300
+
+triton:
+  enabled: true
+  image:
+    repository: nvcr.io/nvidia/tritonserver
+    tag: 25.08-vllm-python-py3  # Triton with the vLLM backend preinstalled
+    pullPolicy: IfNotPresent
+  replicas: 1
+  # Model name inside Triton's model repository.
+  modelName: llm
+  # Chat template the gateway renders for Triton; must match model.id.
+  chatTemplate: chatml
+  resources:
+    requests: {cpu: "4", memory: 16Gi}
+    limits: {nvidia.com/gpu: 1, memory: 32Gi}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    metricName: nv_inference_pending_request_count
+    targetAverageValue: "4"
+    scaleDownStabilizationSeconds: 300
+
+metrics:
+  # Requires the Prometheus Operator CRDs.
+  serviceMonitor:
+    enabled: false
+    interval: 15s
+    labels: {}

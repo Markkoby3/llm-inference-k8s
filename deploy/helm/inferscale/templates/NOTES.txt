@@ -1,0 +1,23 @@
+InferScale is deploying.
+
+Backends: {{ include "inferscale.backends" . }} (default: {{ .Values.gateway.defaultBackend }})
+{{- if or .Values.vllm.enabled .Values.triton.enabled }}
+
+GPU engines download weights and warm up on first start; this can take several
+minutes. Watch progress with:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -w
+{{- end }}
+
+Send a request:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "inferscale.fullname" . }}-gateway 8080:{{ .Values.gateway.service.port }}
+  curl -s localhost:8080/v1/chat/completions \
+    -H 'Content-Type: application/json' \
+    -d '{"messages":[{"role":"user","content":"Explain KV caching in one sentence."}],"max_tokens":64}'
+
+Pick a backend per request with the header X-InferScale-Backend: vllm | triton.
+
+Benchmark:
+
+  inferscale-bench run --url http://localhost:8080 --backend {{ .Values.gateway.defaultBackend }} --concurrency 1,4,16,64

@@ -1,0 +1,9 @@
+# Triton model repository entry for local (Docker) runs. The Helm chart renders
+# the same files into a ConfigMap from values.yaml.
+backend: "vllm"
+instance_group [
+  {
+    count: 1
+    kind: KIND_MODEL
+  }
+]

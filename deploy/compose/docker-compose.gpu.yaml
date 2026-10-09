@@ -1,0 +1,68 @@
+# Single GPU host without Kubernetes: the fastest way to get benchmark numbers.
+#   docker compose -f deploy/compose/docker-compose.gpu.yaml up -d
+# Both engines share one GPU (each capped at ~42% of its memory). Benchmark them
+# one at a time so they do not compete for compute.
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+  shm_size: 8gb
+  volumes:
+    - hf-cache:/root/.cache/huggingface
+  environment:
+    HF_TOKEN: ${HF_TOKEN:-}
+
+services:
+  vllm:
+    <<: *gpu
+    image: vllm/vllm-openai:v0.10.1
+    command:
+      - Qwen/Qwen2.5-1.5B-Instruct
+      - --served-model-name=qwen2.5-1.5b-instruct
+      - --max-model-len=4096
+      - --gpu-memory-utilization=0.42
+    entrypoint: ["vllm", "serve"]
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      retries: 120
+
+  triton:
+    <<: *gpu
+    image: nvcr.io/nvidia/tritonserver:25.08-vllm-python-py3
+    command: ["tritonserver", "--model-repository=/models", "--http-port=8000"]
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      - ../../triton/model_repository:/models:ro
+    ports: ["8001:8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v2/models/llm/ready"]
+      interval: 10s
+      retries: 120
+    # Start after vLLM has claimed its share of GPU memory.
+    depends_on:
+      vllm:
+        condition: service_healthy
+
+  gateway:
+    build: ../..
+    environment:
+      INFERSCALE_BACKENDS: vllm,triton
+      INFERSCALE_DEFAULT_BACKEND: vllm
+      INFERSCALE_VLLM_URL: http://vllm:8000
+      INFERSCALE_TRITON_URL: http://triton:8000
+    ports: ["8080:8080"]
+    depends_on:
+      vllm:
+        condition: service_healthy
+      triton:
+        condition: service_healthy
+
+volumes:
+  hf-cache:

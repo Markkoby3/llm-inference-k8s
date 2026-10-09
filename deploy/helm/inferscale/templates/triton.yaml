@@ -1,0 +1,130 @@
+{{- if .Values.triton.enabled -}}
+{{- $fullname := include "inferscale.fullname" . -}}
+{{- $sel := dict "ctx" . "component" "triton" -}}
+{{- $modelJson := dict "model" .Values.model.id "gpu_memory_utilization" .Values.model.gpuMemoryUtilization "max_model_len" .Values.model.maxModelLen "disable_log_requests" true -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-triton-models
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: triton
+data:
+  # Triton model repository entry served by the vLLM backend. model.json holds
+  # the vLLM engine arguments, so both engines load the model identically.
+  config.pbtxt: |
+    backend: "vllm"
+    instance_group [
+      {
+        count: 1
+        kind: KIND_MODEL
+      }
+    ]
+  model.json: |
+    {{- toJson $modelJson | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-triton
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: triton
+spec:
+  {{- if not .Values.triton.autoscaling.enabled }}
+  replicas: {{ .Values.triton.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" $sel | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "inferscale.selectorLabels" $sel | nindent 8 }}
+      annotations:
+        # Roll the pod when the model configuration changes.
+        checksum/models: {{ toJson $modelJson | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8002"
+        prometheus.io/path: /metrics
+    spec:
+      {{- include "inferscale.engineScheduling" . | nindent 6 }}
+      containers:
+        - name: triton
+          image: "{{ .Values.triton.image.repository }}:{{ .Values.triton.image.tag }}"
+          imagePullPolicy: {{ .Values.triton.image.pullPolicy }}
+          command: ["tritonserver"]
+          args:
+            - --model-repository=/models
+            - --http-port=8000
+            - --grpc-port=8001
+            - --metrics-port=8002
+            - --log-verbose=0
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: grpc
+              containerPort: 8001
+            - name: metrics
+              containerPort: 8002
+          env:
+            {{- include "inferscale.engineEnv" . | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /v2/health/ready, port: http}
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: {path: "/v2/models/{{ .Values.triton.modelName }}/ready", port: http}
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /v2/health/live, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.triton.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "inferscale.engineVolumeMounts" . | nindent 12 }}
+            - name: model-repository
+              mountPath: /models/{{ .Values.triton.modelName }}/config.pbtxt
+              subPath: config.pbtxt
+              readOnly: true
+            - name: model-repository
+              mountPath: /models/{{ .Values.triton.modelName }}/1/model.json
+              subPath: model.json
+              readOnly: true
+      volumes:
+        {{- include "inferscale.engineVolumes" . | nindent 8 }}
+        - name: model-repository
+          configMap:
+            name: {{ $fullname }}-triton-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-triton
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: triton
+spec:
+  selector:
+    {{- include "inferscale.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+    - name: grpc
+      port: 8001
+      targetPort: grpc
+    - name: metrics
+      port: 8002
+      targetPort: metrics
+{{- with .Values.triton.autoscaling }}
+{{- if .enabled }}
+---
+{{ include "inferscale.engineHPA" (dict "ctx" $ "component" "triton" "autoscaling" .) }}
+{{- end }}
+{{- end }}
+{{- end }}

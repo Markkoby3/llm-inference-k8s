@@ -1,0 +1,12 @@
+apiVersion: v2
+name: inferscale
+description: OpenAI-compatible LLM inference gateway over vLLM and NVIDIA Triton backends on Kubernetes.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [llm, inference, vllm, triton, gpu]
+home: https://github.com/Markkoby3/llm-inference-k8s
+sources: [https://github.com/Markkoby3/llm-inference-k8s]
+maintainers:
+  - name: Mark Osei Kwabi
+    url: https://github.com/Markkoby3

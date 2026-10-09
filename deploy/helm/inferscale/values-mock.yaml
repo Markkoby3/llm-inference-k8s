@@ -1,0 +1,23 @@
+# CPU-only profile for kind, minikube and CI: the gateway runs its built-in mock
+# backend, so the chart, probes, autoscaling and benchmark harness can be
+# exercised end to end without a GPU.
+
+vllm:
+  enabled: false
+triton:
+  enabled: false
+
+gateway:
+  image:
+    repository: inferscale-gateway
+    tag: dev
+    pullPolicy: Never  # image is side-loaded with `kind load docker-image`
+  replicas: 1
+  defaultBackend: mock
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 256Mi}

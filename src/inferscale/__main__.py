@@ -25,6 +25,8 @@ def main() -> None:
         # admission limits and metrics stay per-process and accurate.
         workers=1,
         timeout_keep_alive=75,
+        # On SIGTERM, finish in-flight streams (within the pod's grace period).
+        timeout_graceful_shutdown=45,
     )
 
 

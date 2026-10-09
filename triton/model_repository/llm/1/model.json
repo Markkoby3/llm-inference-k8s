@@ -1,0 +1,6 @@
+{
+  "model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "gpu_memory_utilization": 0.42,
+  "max_model_len": 4096,
+  "disable_log_requests": true
+}

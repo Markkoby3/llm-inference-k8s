@@ -1,0 +1,172 @@
+{{- $fullname := include "inferscale.fullname" . -}}
+{{- $sel := dict "ctx" . "component" "gateway" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" $sel | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "inferscale.selectorLabels" $sel | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ default .Chart.AppVersion .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: INFERSCALE_BACKENDS
+              value: {{ include "inferscale.backends" . | quote }}
+            - name: INFERSCALE_DEFAULT_BACKEND
+              value: {{ include "inferscale.defaultBackend" . | quote }}
+            - name: INFERSCALE_MODEL_NAME
+              value: {{ .Values.model.servedName | quote }}
+            - name: INFERSCALE_MAX_INFLIGHT
+              value: {{ .Values.gateway.maxInflight | quote }}
+            - name: INFERSCALE_REQUEST_TIMEOUT_S
+              value: {{ .Values.gateway.requestTimeoutSeconds | quote }}
+            - name: INFERSCALE_LOG_LEVEL
+              value: {{ .Values.gateway.logLevel | quote }}
+            {{- if .Values.vllm.enabled }}
+            - name: INFERSCALE_VLLM_URL
+              value: "http://{{ $fullname }}-vllm:8000"
+            - name: INFERSCALE_VLLM_MODEL
+              value: {{ .Values.model.servedName | quote }}
+            {{- end }}
+            {{- if .Values.triton.enabled }}
+            - name: INFERSCALE_TRITON_URL
+              value: "http://{{ $fullname }}-triton:8000"
+            - name: INFERSCALE_TRITON_MODEL
+              value: {{ .Values.triton.modelName | quote }}
+            - name: INFERSCALE_TRITON_CHAT_TEMPLATE
+              value: {{ .Values.triton.chatTemplate | quote }}
+            {{- end }}
+            - name: INFERSCALE_MOCK_TTFT_MS
+              value: {{ .Values.gateway.mock.ttftMs | quote }}
+            - name: INFERSCALE_MOCK_INTER_TOKEN_MS
+              value: {{ .Values.gateway.mock.interTokenMs | quote }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            # Let endpoints update and the load balancer stop routing here
+            # before uvicorn begins its graceful shutdown.
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      affinity:
+        {{- if .Values.gateway.affinity }}
+        {{- toYaml .Values.gateway.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "inferscale.selectorLabels" $sel | nindent 20 }}
+        {{- end }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  selector:
+    {{- include "inferscale.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.gateway.service.port }}
+      targetPort: http
+{{- if .Values.gateway.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $fullname }}-gateway
+  minReplicas: {{ .Values.gateway.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.gateway.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.gateway.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+{{- if .Values.gateway.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-gateway
+  labels:
+    {{- include "inferscale.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  minAvailable: {{ .Values.gateway.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" $sel | nindent 6 }}
+{{- end }}

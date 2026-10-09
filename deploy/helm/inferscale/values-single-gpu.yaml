@@ -1,0 +1,29 @@
+# One node with one GPU (e.g. a rented cloud VM running k3s).
+#
+# Both engines share the device through NVIDIA device-plugin time-slicing
+# (replicas: 2, see docs/gpu-benchmark-runbook.md), so each pod still requests
+# nvidia.com/gpu: 1. Time-slicing does not partition memory, so each engine is
+# capped at ~42% of it. Benchmark the engines one at a time so they are not
+# competing for compute.
+
+model:
+  gpuMemoryUtilization: 0.42
+
+gpu:
+  runtimeClassName: nvidia
+
+gateway:
+  replicas: 1
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    enabled: false
+
+vllm:
+  resources:
+    requests: {cpu: "2", memory: 8Gi}
+    limits: {memory: 24Gi}
+triton:
+  resources:
+    requests: {cpu: "2", memory: 8Gi}
+    limits: {memory: 24Gi}

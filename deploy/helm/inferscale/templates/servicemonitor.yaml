@@ -1,0 +1,30 @@
+{{- if .Values.metrics.serviceMonitor.enabled -}}
+{{- $fullname := include "inferscale.fullname" . -}}
+{{- $root := . -}}
+{{- $targets := list (dict "component" "gateway" "port" "http") -}}
+{{- if .Values.vllm.enabled }}{{ $targets = append $targets (dict "component" "vllm" "port" "http") }}{{ end -}}
+{{- if .Values.triton.enabled }}{{ $targets = append $targets (dict "component" "triton" "port" "metrics") }}{{ end -}}
+{{- range $i, $t := $targets }}
+{{- if $i }}
+---
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullname }}-{{ $t.component }}
+  labels:
+    {{- include "inferscale.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $t.component }}
+    {{- with $root.Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "inferscale.selectorLabels" (dict "ctx" $root "component" $t.component) | nindent 6 }}
+  endpoints:
+    - port: {{ $t.port }}
+      path: /metrics
+      interval: {{ $root.Values.metrics.serviceMonitor.interval }}
+{{- end }}
+{{- end }}
